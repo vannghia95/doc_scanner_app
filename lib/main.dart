@@ -426,11 +426,11 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
 
     final payload = jsonEncode({
       'contents': [{'parts': [
-        {'text': 'Chép lại chính xác toàn bộ chữ trong ảnh này (đúng dấu tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về văn bản.'},
+        {'text': 'Bạn là trợ lý số hóa tài liệu nghiên cứu cá nhân. Hãy chuyển đổi nội dung văn bản trong ảnh này thành ghi chú dạng văn bản thuần túy để người dùng đọc trên điện thoại, chuẩn hóa lại ngắt dòng và dấu câu cho rõ ràng. Không thêm lời bình luận.'},
         {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
       ]}],
       'generationConfig': {
-        'temperature': 0.1,
+        'temperature': 0.3,
         'maxOutputTokens': 4096,
         'thinkingConfig': {'thinkingBudget': 0}
       }
@@ -462,7 +462,17 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         }
       }
       final extracted = textBuf.toString().trim();
-      return extracted.isEmpty ? 'AI không trả về chữ (${res.body})' : extracted;
+      if (extracted.isEmpty) {
+        // Nếu bị bộ lọc RECITATION chặn, tự động chuyển sang bộ đọc Offline ML Kit để luôn có kết quả
+        final rec = TextRecognizer(script: _useChineseScript ? TextRecognitionScript.chinese : TextRecognitionScript.latin);
+        try {
+          final offRes = await rec.processImage(InputImage.fromFilePath(await _preprocessForOcr(widget.doc.imagePaths[idx])));
+          return offRes.text.trim().isEmpty ? 'Không nhận diện được chữ.' : offRes.text.trim();
+        } finally {
+          await rec.close();
+        }
+      }
+      return extracted;
     } else {
       throw Exception('Lỗi API (${res.statusCode}): ${res.body}');
     }
