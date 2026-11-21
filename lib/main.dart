@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:cunning_document_scanner/cunning_document_scanner.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:image/image.dart' as img;
+import 'package:http/http.dart' as http;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
@@ -31,7 +33,6 @@ class DocScannerApp extends StatelessWidget {
   }
 }
 
-// Mô hình dữ liệu một bộ tài liệu
 class ScannedDoc {
   String id;
   String title;
@@ -60,7 +61,6 @@ class ScannedDoc {
       );
 }
 
-// Quản lý lưu trữ cục bộ vĩnh viễn
 class StorageService {
   static Future<Directory> get _docsDir async {
     final appDir = await getApplicationDocumentsDirectory();
@@ -74,6 +74,24 @@ class StorageService {
   static Future<File> get _indexFile async {
     final dir = await _docsDir;
     return File('${dir.path}/index.json');
+  }
+
+  static Future<File> get _apiKeyFile async {
+    final dir = await _docsDir;
+    return File('${dir.path}/gemini_key.txt');
+  }
+
+  static Future<String> getApiKey() async {
+    try {
+      final f = await _apiKeyFile;
+      if (await f.exists()) return (await f.readAsString()).trim();
+    } catch (_) {}
+    return '';
+  }
+
+  static Future<void> saveApiKey(String key) async {
+    final f = await _apiKeyFile;
+    await f.writeAsString(key.trim());
   }
 
   static Future<List<ScannedDoc>> loadDocs() async {
@@ -112,7 +130,6 @@ class StorageService {
   }
 }
 
-// Màn hình chính: Danh sách các bộ tài liệu đã lưu
 class DocumentListScreen extends StatefulWidget {
   const DocumentListScreen({super.key});
 
@@ -170,7 +187,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           MaterialPageRoute(
             builder: (_) => DocumentDetailScreen(
               doc: newDoc,
-              onUpdate: () => StorageService.saveDocs(_docs).then((_) => _refreshDocs()),
+              onUpdate: () =>
+                  StorageService.saveDocs(_docs).then((_) => _refreshDocs()),
             ),
           ),
         );
@@ -221,12 +239,66 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     }
   }
 
+  Future<void> _configureApiKey() async {
+    final currentKey = await StorageService.getApiKey();
+    final controller = TextEditingController(text: currentKey);
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cài đặt Gemini AI OCR'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Nhập Gemini API Key (miễn phí tại aistudio.google.com) để nhận diện tiếng Việt có dấu & Hán-Nôm chuẩn xác 99%:',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                hintText: 'AIzaSy...',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng')),
+          FilledButton(
+            onPressed: () async {
+              await StorageService.saveApiKey(controller.text);
+              if (context.mounted) Navigator.pop(context);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Đã lưu Gemini API Key!')),
+                );
+              }
+            },
+            child: const Text('Lưu Key'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Kho Tài Liệu Scan'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.key),
+            tooltip: 'Cài đặt API Key AI OCR',
+            onPressed: _configureApiKey,
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -343,7 +415,6 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   }
 }
 
-// Màn hình chi tiết một bộ tài liệu: Xem trang, quét thêm, OCR đa ngôn ngữ, nén & xuất PDF/TXT
 class DocumentDetailScreen extends StatefulWidget {
   final ScannedDoc doc;
   final VoidCallback onUpdate;
@@ -361,7 +432,8 @@ class DocumentDetailScreen extends StatefulWidget {
 class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   bool _isExporting = false;
   bool _isRecognizing = false;
-  bool _useChineseScript = false; // false: Latin (Việt/Anh), true: Chữ Hán
+  String _loadingMessage = 'Đang nhận diện văn bản...';
+  bool _useChineseScript = false;
 
   Future<void> _scanMorePages() async {
     try {
@@ -381,10 +453,42 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     }
   }
 
-  Future<void> _recognizeText({int? singlePageIndex}) async {
+  // Tiền xử lý ảnh: Chuyển thang xám & tăng tương phản để ML Kit bắt dấu tiếng Việt rõ hơn
+  Future<String> _preprocessImageForOcr(String rawPath) async {
+    try {
+      final bytes = await File(rawPath).readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return rawPath;
+
+      // Phóng to nhẹ nếu ảnh nhỏ để tách rõ dấu thanh (hỏi, ngã, nặng)
+      img.Image processed = decoded;
+      if (decoded.width < 1600) {
+        processed = img.copyResize(decoded, width: 1600);
+      }
+
+      // Chuyển sang đen trắng xám và tăng độ tương phản (contrast = 135)
+      processed = img.grayscale(processed);
+      processed = img.adjustColor(processed, contrast: 1.35, brightness: 1.05);
+
+      final tempDir = await getTemporaryDirectory();
+      final outPath =
+          '${tempDir.path}/ocr_pre_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await File(outPath).writeAsBytes(img.encodeJpg(processed, quality: 92));
+      return outPath;
+    } catch (_) {
+      return rawPath;
+    }
+  }
+
+  // OCR Offline có tiền xử lý ảnh
+  Future<void> _recognizeTextOffline({int? singlePageIndex}) async {
     if (widget.doc.imagePaths.isEmpty) return;
 
-    setState(() => _isRecognizing = true);
+    setState(() {
+      _isRecognizing = true;
+      _loadingMessage = 'Đang tối ưu ảnh & đọc chữ Offline...';
+    });
+
     final recognizer = TextRecognizer(
       script: _useChineseScript
           ? TextRecognitionScript.chinese
@@ -395,13 +499,16 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       final StringBuffer buffer = StringBuffer();
 
       if (singlePageIndex != null) {
-        final inputImage =
-            InputImage.fromFilePath(widget.doc.imagePaths[singlePageIndex]);
+        final enhancedPath =
+            await _preprocessImageForOcr(widget.doc.imagePaths[singlePageIndex]);
+        final inputImage = InputImage.fromFilePath(enhancedPath);
         final recognized = await recognizer.processImage(inputImage);
         buffer.writeln(recognized.text);
       } else {
         for (int i = 0; i < widget.doc.imagePaths.length; i++) {
-          final inputImage = InputImage.fromFilePath(widget.doc.imagePaths[i]);
+          final enhancedPath =
+              await _preprocessImageForOcr(widget.doc.imagePaths[i]);
+          final inputImage = InputImage.fromFilePath(enhancedPath);
           final recognized = await recognizer.processImage(inputImage);
           buffer.writeln('--- TRANG ${i + 1} ---');
           buffer.writeln(recognized.text);
@@ -414,16 +521,103 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
 
       _showExtractedTextSheet(
         title: singlePageIndex != null
-            ? 'Văn bản Trang ${singlePageIndex + 1}'
-            : 'Toàn bộ (${widget.doc.imagePaths.length} trang)',
+            ? 'OCR Offline - Trang ${singlePageIndex + 1}'
+            : 'OCR Offline (${widget.doc.imagePaths.length} trang)',
         text: resultText.isEmpty
-            ? 'Không nhận diện được chữ (thử đổi chế độ Latin/Chữ Hán ở góc trên).'
+            ? 'Không tìm thấy chữ. Thử dùng nút "AI OCR" để nhận diện chính xác hơn.'
             : resultText,
       );
     } catch (e) {
       _showSnackBar('Lỗi OCR: $e');
     } finally {
       await recognizer.close();
+      if (mounted) setState(() => _isRecognizing = false);
+    }
+  }
+
+  // OCR Siêu chuẩn bằng Gemini AI (Tiếng Việt có dấu & Hán-Nôm)
+  Future<void> _recognizeTextWithGeminiAI({int? singlePageIndex}) async {
+    final apiKey = await StorageService.getApiKey();
+    if (apiKey.isEmpty) {
+      _showSnackBar(
+          'Vui lòng bấm biểu tượng Chìa khóa ở màn hình chính để nhập Gemini API Key trước.');
+      return;
+    }
+
+    setState(() {
+      _isRecognizing = true;
+      _loadingMessage = 'Gemini AI đang đọc chính xác từng dấu thanh...';
+    });
+
+    try {
+      final List<int> targetIndices = singlePageIndex != null
+          ? [singlePageIndex]
+          : List.generate(widget.doc.imagePaths.length, (i) => i);
+
+      final StringBuffer buffer = StringBuffer();
+
+      for (final idx in targetIndices) {
+        final compressedBytes = await FlutterImageCompress.compressWithFile(
+          widget.doc.imagePaths[idx],
+          minWidth: 1600,
+          minHeight: 1600,
+          quality: 85,
+        );
+        final bytes =
+            compressedBytes ?? await File(widget.doc.imagePaths[idx]).readAsBytes();
+        final base64Img = base64Encode(bytes);
+
+        final url = Uri.parse(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey');
+
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'contents': [
+              {
+                'parts': [
+                  {
+                    'text':
+                        'Hãy trích xuất chính xác toàn bộ văn bản trong ảnh tài liệu này (giữ đúng từng dấu thanh tiếng Việt, chữ Hán nếu có, và ngắt đoạn tự nhiên). Chỉ trả về nội dung văn bản, không thêm lời bình luận.'
+                  },
+                  {
+                    'inline_data': {
+                      'mime_type': 'image/jpeg',
+                      'data': base64Img,
+                    }
+                  }
+                ]
+              }
+            ]
+          }),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final text = data['candidates']?[0]?['content']?['parts']?[0]
+                  ?['text'] ??
+              '';
+          if (targetIndices.length > 1) {
+            buffer.writeln('--- TRANG ${idx + 1} ---');
+          }
+          buffer.writeln(text.toString().trim());
+          buffer.writeln();
+        } else {
+          throw Exception('Lỗi API (${response.statusCode}): ${response.body}');
+        }
+      }
+
+      if (!mounted) return;
+      _showExtractedTextSheet(
+        title: singlePageIndex != null
+            ? 'AI OCR - Trang ${singlePageIndex + 1}'
+            : 'AI OCR (${widget.doc.imagePaths.length} trang)',
+        text: buffer.toString().trim(),
+      );
+    } catch (e) {
+      _showSnackBar('Lỗi AI OCR: $e');
+    } finally {
       if (mounted) setState(() => _isRecognizing = false);
     }
   }
@@ -520,7 +714,6 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     );
   }
 
-  // Nén ảnh thông minh và xuất PDF dung lượng nhẹ
   Future<void> _exportCompressedPdf() async {
     if (widget.doc.imagePaths.isEmpty) return;
 
@@ -530,7 +723,6 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       final pdf = pw.Document();
 
       for (final imagePath in widget.doc.imagePaths) {
-        // Nén ảnh xuống độ phân giải tối ưu cho in ấn/đọc (1500px, quality 80%)
         final compressedBytes = await FlutterImageCompress.compressWithFile(
           imagePath,
           minWidth: 1500,
@@ -592,25 +784,29 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.doc.title, style: const TextStyle(fontSize: 16)),
+        title: Text(widget.doc.title, style: const TextStyle(fontSize: 15)),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          // Nút chuyển chế độ OCR: Việt/Anh <-> Chữ Hán
-          TextButton.icon(
+          TextButton(
             onPressed: () {
               setState(() => _useChineseScript = !_useChineseScript);
               _showSnackBar(_useChineseScript
-                  ? 'Chế độ OCR: Chữ Hán / Trung / Nhật'
-                  : 'Chế độ OCR: Tiếng Việt / Tiếng Anh');
+                  ? 'Offline OCR: Chữ Hán / Trung / Nhật'
+                  : 'Offline OCR: Tiếng Việt / Anh');
             },
-            icon: const Icon(Icons.translate, size: 18),
-            label: Text(_useChineseScript ? 'Hán' : 'Việt/Anh',
+            child: Text(_useChineseScript ? 'Hán' : 'Việt',
                 style: const TextStyle(fontWeight: FontWeight.bold)),
           ),
           IconButton(
             icon: const Icon(Icons.text_snippet_outlined),
-            tooltip: 'Đọc chữ toàn bộ tài liệu',
-            onPressed: _isRecognizing ? null : () => _recognizeText(),
+            tooltip: 'Đọc chữ Offline (Toàn bộ)',
+            onPressed: _isRecognizing ? null : () => _recognizeTextOffline(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.auto_awesome, color: Colors.deepPurple),
+            tooltip: 'AI OCR Siêu chuẩn (Toàn bộ)',
+            onPressed:
+                _isRecognizing ? null : () => _recognizeTextWithGeminiAI(),
           ),
         ],
       ),
@@ -655,22 +851,43 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                               ),
                             ),
                           ),
+                          // Nút AI OCR (màu tím) + Offline OCR (màu xanh) cho từng trang
                           Positioned(
                             bottom: 4,
                             right: 4,
-                            child: CircleAvatar(
-                              radius: 18,
-                              backgroundColor: Colors.teal,
-                              child: IconButton(
-                                padding: EdgeInsets.zero,
-                                tooltip: 'Đọc chữ trang này',
-                                icon: const Icon(Icons.text_fields,
-                                    size: 18, color: Colors.white),
-                                onPressed: _isRecognizing
-                                    ? null
-                                    : () =>
-                                        _recognizeText(singlePageIndex: index),
-                              ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                CircleAvatar(
+                                  radius: 17,
+                                  backgroundColor: Colors.deepPurple,
+                                  child: IconButton(
+                                    padding: EdgeInsets.zero,
+                                    tooltip: 'AI OCR (Siêu chuẩn)',
+                                    icon: const Icon(Icons.auto_awesome,
+                                        size: 16, color: Colors.white),
+                                    onPressed: _isRecognizing
+                                        ? null
+                                        : () => _recognizeTextWithGeminiAI(
+                                            singlePageIndex: index),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                CircleAvatar(
+                                  radius: 17,
+                                  backgroundColor: Colors.teal,
+                                  child: IconButton(
+                                    padding: EdgeInsets.zero,
+                                    tooltip: 'OCR Offline',
+                                    icon: const Icon(Icons.text_fields,
+                                        size: 17, color: Colors.white),
+                                    onPressed: _isRecognizing
+                                        ? null
+                                        : () => _recognizeTextOffline(
+                                            singlePageIndex: index),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           Positioned(
@@ -695,16 +912,16 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
           if (_isRecognizing)
             Container(
               color: Colors.black45,
-              child: const Center(
+              child: Center(
                 child: Card(
                   child: Padding(
-                    padding: EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(20),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 16),
-                        Text('Đang nhận diện văn bản...'),
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
+                        Text(_loadingMessage, textAlign: TextAlign.center),
                       ],
                     ),
                   ),
