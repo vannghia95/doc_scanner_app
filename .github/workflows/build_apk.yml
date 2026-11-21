@@ -24,7 +24,6 @@ jobs:
           channel: 'stable'
 
       - name: Restore or Create Persistent Android Keystore
-        id: keystore_cache
         uses: actions/cache@v4
         with:
           path: persistent_keystore/release.jks
@@ -64,72 +63,28 @@ jobs:
           -dontwarn com.google.android.libraries.vision.**
           EOF
 
-          cat << 'EOF' > android/key.properties
-          storePassword=DocScan2026
-          keyPassword=DocScan2026
-          keyAlias=upload
-          storeFile=release.jks
-          EOF
+          # Chèn cấu hình signingConfigs trực tiếp vào file build.gradle.kts gốc của Flutter
+          python3 -c '
+          with open("android/app/build.gradle.kts", "r") as f:
+              content = f.read()
 
-          cat << 'EOF' > android/app/build.gradle.kts
-          import java.util.Properties
-          import java.io.FileInputStream
-
-          plugins {
-              id("com.android.application")
-              id("kotlin-android")
-              id("dev.flutter.flutter-gradle-plugin")
-          }
-
-          val keystoreProperties = Properties()
-          val keystorePropertiesFile = rootProject.file("key.properties")
-          if (keystorePropertiesFile.exists()) {
-              keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-          }
-
-          android {
-              namespace = "vn.edu.vnu.doc_scanner_app"
-              compileSdk = flutter.compileSdkVersion
-              ndkVersion = flutter.ndkVersion
-
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = JavaVersion.VERSION_17.toString()
-              }
-
-              defaultConfig {
-                  applicationId = "vn.edu.vnu.doc_scanner_app"
-                  minSdk = 21
-                  targetSdk = flutter.targetSdkVersion
-                  versionCode = flutter.versionCode
-                  versionName = flutter.versionName
-              }
-
+          signing_block = """
               signingConfigs {
                   create("release") {
-                      keyAlias = keystoreProperties.getProperty("keyAlias")
-                      keyPassword = keystoreProperties.getProperty("keyPassword")
-                      storeFile = file(keystoreProperties.getProperty("storeFile"))
-                      storePassword = keystoreProperties.getProperty("storePassword")
+                      keyAlias = "upload"
+                      keyPassword = "DocScan2026"
+                      storeFile = file("release.jks")
+                      storePassword = "DocScan2026"
                   }
               }
+          """
+          content = content.replace("buildTypes {", signing_block + "\n    buildTypes {")
+          content = content.replace("signingConfigs.getByName(\"debug\")", "signingConfigs.getByName(\"release\")")
+          content = content.replace("release {", "release {\n            proguardFiles(getDefaultProguardFile(\"proguard-android-optimize.txt\"), \"proguard-rules.pro\")")
 
-              buildTypes {
-                  release {
-                      signingConfig = signingConfigs.getByName("release")
-                      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-                  }
-              }
-          }
-
-          flutter {
-              source = "../.."
-          }
-          EOF
+          with open("android/app/build.gradle.kts", "w") as f:
+              f.write(content)
+          '
 
           flutter build apk --release
 
