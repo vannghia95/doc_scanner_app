@@ -427,7 +427,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
         final res = await http.post(
           Uri.parse('https://generativelanguage.googleapis.com/v1beta/interactions'),
-          headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
+          headers: {'Content-Type': 'application/json', if (apiKey.startsWith('AQ.')) 'Authorization': 'Bearer $apiKey' else 'x-goog-api-key': apiKey},
           body: jsonEncode({
             'model': 'gemini-3.8-flash',
             'input': [
