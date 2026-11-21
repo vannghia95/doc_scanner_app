@@ -426,7 +426,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         final comp = await FlutterImageCompress.compressWithFile(widget.doc.imagePaths[idx], minWidth: 1600, minHeight: 1600, quality: 85);
         final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
         final res = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey'),
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent'),
           headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
           body: jsonEncode({
             'contents': [{'parts': [
