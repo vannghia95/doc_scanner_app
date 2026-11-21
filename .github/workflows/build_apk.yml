@@ -30,6 +30,23 @@ jobs:
           flutter pub add cunning_document_scanner google_mlkit_text_recognition flutter_image_compress pdf share_plus path_provider
           cp ../lib/main.dart lib/main.dart
           sed -i 's/<application/<uses-permission android:name="android.permission.CAMERA" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle*
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle*
+
+          cat << 'EOF' > android/app/proguard-rules.pro
+          -keep class com.google.mlkit.** { *; }
+          -keep class com.google.android.gms.** { *; }
+          -dontwarn com.google.mlkit.**
+          -dontwarn com.google.android.gms.**
+          -dontwarn com.google.android.libraries.vision.**
+          EOF
+
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/release {/release {\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")/' android/app/build.gradle.kts
+          else
+            sed -i 's/release {/release {\n            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"/' android/app/build.gradle
+          fi
+
           flutter build apk --release
 
       - name: Upload APK Artifact
