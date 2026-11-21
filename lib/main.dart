@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -426,7 +426,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         final comp = await FlutterImageCompress.compressWithFile(widget.doc.imagePaths[idx], minWidth: 1600, minHeight: 1600, quality: 85);
         final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
         final res = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey'),
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
             'contents': [{'parts': [
