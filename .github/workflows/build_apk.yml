@@ -27,7 +27,7 @@ jobs:
           mkdir temp_app
           cd temp_app
           flutter create --project-name doc_scanner_app --org vn.edu.vnu .
-          flutter pub add cunning_document_scanner google_mlkit_text_recognition pdf share_plus path_provider
+          flutter pub add cunning_document_scanner google_mlkit_text_recognition flutter_image_compress pdf share_plus path_provider
           cp ../lib/main.dart lib/main.dart
           sed -i 's/<application/<uses-permission android:name="android.permission.CAMERA" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
           flutter build apk --release
@@ -35,5 +35,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DocScanner-OCR-Android
+          name: DocScanner-Pro-Android
           path: temp_app/build/app/outputs/flutter-apk/app-release.apk
