@@ -426,27 +426,19 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         final comp = await FlutterImageCompress.compressWithFile(widget.doc.imagePaths[idx], minWidth: 1600, minHeight: 1600, quality: 85);
         final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
         final res = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/interactions'),
-          headers: {'Content-Type': 'application/json', if (apiKey.startsWith('AQ.')) 'Authorization': 'Bearer $apiKey' else 'x-goog-api-key': apiKey},
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent'),
+          headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
           body: jsonEncode({
-            'model': 'gemini-3.8-flash',
-            'input': [
-              {'type': 'text', 'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh này (giữ đúng từng dấu thanh tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về nội dung văn bản, không giải thích gì thêm.'},
-              {'type': 'image', 'data': b64, 'mime_type': 'image/jpeg'}
-            ]
+            'contents': [{'parts': [
+              {'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh tài liệu này (giữ đúng từng dấu thanh tiếng Việt, chữ Hán nếu có, và ngắt đoạn tự nhiên). Chỉ trả về nội dung văn bản, không giải thích gì thêm.'},
+              {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
+            ]}]
           }),
         );
         if (res.statusCode == 200) {
-          final data = jsonDecode(res.body);
-          String txt = '';
-          final outputs = data['outputs'] as List? ?? [];
-          for (final item in outputs) {
-            if (item['type'] == 'text' && item['text'] != null) {
-              txt += item['text'].toString();
-            }
-          }
+          final txt = jsonDecode(res.body)['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
           if (indices.length > 1) buf.writeln('--- TRANG ${idx + 1} ---');
-          buf.writeln(txt.trim());
+          buf.writeln(txt.toString().trim());
           buf.writeln();
         } else {
           throw Exception('Lỗi API (${res.statusCode}): ${res.body}');
