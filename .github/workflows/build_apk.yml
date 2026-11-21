@@ -40,7 +40,7 @@ jobs:
         run: |
           mkdir temp_app && cd temp_app
           flutter create --project-name doc_scanner_app --org vn.edu.vnu .
-          flutter pub add cunning_document_scanner google_mlkit_text_recognition flutter_image_compress image http package_info_plus open_filex pdf share_plus path_provider
+          flutter pub add cunning_document_scanner google_mlkit_text_recognition flutter_image_compress image http package_info_plus open_filex image_cropper pdf share_plus path_provider
           cp ../lib/main.dart lib/main.dart
           cp ../persistent_keystore/release.jks android/app/release.jks
 
@@ -51,7 +51,7 @@ jobs:
             sed -i "s/^version: .*/version: 1.0.${GITHUB_RUN_NUMBER}+${GITHUB_RUN_NUMBER}/" pubspec.yaml
           fi
 
-          sed -i 's/<application/<uses-permission android:name="android.permission.CAMERA" \/>\n    <uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/<application/<uses-permission android:name="android.permission.CAMERA" \/>\n    <uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" \/>\n    <application/' android/app/src/main/AndroidManifest.xml && sed -i 's/<\/application>/<activity android:name="com.yalantis.ucrop.UCropActivity" android:screenOrientation="portrait" android:theme="@style\/Theme.AppCompat.Light.NoActionBar"\/><\/application>/' android/app/src/main/AndroidManifest.xml
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle*
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle*
 

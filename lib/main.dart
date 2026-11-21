@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
@@ -710,7 +711,51 @@ class _PageEditorScreenState extends State<PageEditorScreen> {
     }
   }
 
-  Future<void> _retakeOrCropCurrentPage() async {
+  // Cắt trực tiếp trên chính bức ảnh của trang hiện tại
+  Future<void> _cropCurrentPageDirectly() async {
+    if (_isProcessing || widget.doc.imagePaths.isEmpty) return;
+    try {
+      final path = widget.doc.imagePaths[_currentIndex];
+      final cropped = await ImageCropper().cropImage(
+        sourcePath: path,
+        compressFormat: ImageCompressFormat.jpg,
+        compressQuality: 92,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Cắt trang ${_currentIndex + 1}',
+            toolbarColor: Colors.teal,
+            toolbarWidgetColor: Colors.white,
+            activeControlsWidgetColor: Colors.teal,
+            initAspectRatio: CropAspectRatioPreset.original,
+            lockAspectRatio: false,
+          ),
+        ],
+      );
+
+      if (cropped != null) {
+        setState(() => _isProcessing = true);
+        final croppedBytes = await File(cropped.path).readAsBytes();
+        await File(path).writeAsBytes(croppedBytes);
+        FileImage(File(path)).evict();
+        setState(() => _imageRevision++);
+        widget.onChanged();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Đã lưu vùng cắt mới!')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi cắt ảnh: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  // Quét lại trang mới để thay thế trang hiện tại
+  Future<void> _retakeCurrentPage() async {
     if (_isProcessing || widget.doc.imagePaths.isEmpty) return;
     try {
       final pics = await CunningDocumentScanner.getPictures(
@@ -730,14 +775,14 @@ class _PageEditorScreenState extends State<PageEditorScreen> {
           widget.onChanged();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Đã cập nhật trang mới!')),
+              const SnackBar(content: Text('Đã thay thế bằng trang quét mới!')),
             );
           }
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi chỉnh sửa trang: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi quét lại: $e')));
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
@@ -843,27 +888,59 @@ class _PageEditorScreenState extends State<PageEditorScreen> {
       bottomNavigationBar: SafeArea(
         child: Container(
           color: Colors.black87,
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              TextButton.icon(
-                onPressed: _isProcessing ? null : () => _rotateCurrentPage(-90),
-                icon: const Icon(Icons.rotate_left, color: Colors.white),
-                label: const Text('Xoay trái', style: TextStyle(color: Colors.white, fontSize: 12)),
+              _buildBottomAction(
+                icon: Icons.rotate_left,
+                label: 'Xoay trái',
+                color: Colors.white,
+                onTap: _isProcessing ? null : () => _rotateCurrentPage(-90),
               ),
-              TextButton.icon(
-                onPressed: _isProcessing ? null : () => _rotateCurrentPage(90),
-                icon: const Icon(Icons.rotate_right, color: Colors.white),
-                label: const Text('Xoay phải', style: TextStyle(color: Colors.white, fontSize: 12)),
+              _buildBottomAction(
+                icon: Icons.rotate_right,
+                label: 'Xoay phải',
+                color: Colors.white,
+                onTap: _isProcessing ? null : () => _rotateCurrentPage(90),
               ),
-              TextButton.icon(
-                onPressed: _isProcessing ? null : _retakeOrCropCurrentPage,
-                icon: const Icon(Icons.crop_rotate, color: Colors.tealAccent),
-                label: const Text('Quét / Cắt lại', style: TextStyle(color: Colors.tealAccent, fontSize: 12)),
+              _buildBottomAction(
+                icon: Icons.crop,
+                label: 'Cắt ảnh',
+                color: Colors.amberAccent,
+                onTap: _isProcessing ? null : _cropCurrentPageDirectly,
+              ),
+              _buildBottomAction(
+                icon: Icons.camera_alt_outlined,
+                label: 'Quét lại',
+                color: Colors.tealAccent,
+                onTap: _isProcessing ? null : _retakeCurrentPage,
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 4),
+            Text(label, style: TextStyle(color: color, fontSize: 11)),
+          ],
         ),
       ),
     );
