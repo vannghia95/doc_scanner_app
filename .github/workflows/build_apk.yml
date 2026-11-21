@@ -22,21 +22,26 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-      - name: Initialize Flutter Project & Build APK
+      - name: Initialize Flutter Project & Build Signed APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           mkdir temp_app && cd temp_app
           flutter create --project-name doc_scanner_app --org vn.edu.vnu .
           flutter pub add cunning_document_scanner google_mlkit_text_recognition flutter_image_compress image http package_info_plus open_filex pdf share_plus path_provider
           cp ../lib/main.dart lib/main.dart
+
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG_VER=${GITHUB_REF#refs/tags/v}
             sed -i "s/^version: .*/version: ${TAG_VER}+${GITHUB_RUN_NUMBER}/" pubspec.yaml
           else
             sed -i "s/^version: .*/version: 1.0.${GITHUB_RUN_NUMBER}+${GITHUB_RUN_NUMBER}/" pubspec.yaml
           fi
+
           sed -i 's/<application/<uses-permission android:name="android.permission.CAMERA" \/>\n    <uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle*
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle*
+
           cat << 'EOF' > android/app/proguard-rules.pro
           -keep class com.google.mlkit.** { *; }
           -keep class com.google.android.gms.** { *; }
@@ -44,12 +49,77 @@ jobs:
           -dontwarn com.google.android.gms.**
           -dontwarn com.google.android.libraries.vision.**
           EOF
-          if [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/release {/release {\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")/' android/app/build.gradle.kts
-          else
-            sed -i 's/release {/release {\n            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"/' android/app/build.gradle
-          fi
+
+          echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks
+          cat << 'EOF' > android/key.properties
+          storePassword=DocScan2026
+          keyPassword=DocScan2026
+          keyAlias=upload
+          storeFile=release.jks
+          EOF
+
+          cat << 'EOF' > android/app/build.gradle.kts
+          import java.util.Properties
+          import java.io.FileInputStream
+
+          plugins {
+              id("com.android.application")
+              id("kotlin-android")
+              id("dev.flutter.flutter-gradle-plugin")
+          }
+
+          val keystoreProperties = Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+          }
+
+          android {
+              namespace = "vn.edu.vnu.doc_scanner_app"
+              compileSdk = flutter.compileSdkVersion
+              ndkVersion = flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = JavaVersion.VERSION_17.toString()
+              }
+
+              defaultConfig {
+                  applicationId = "vn.edu.vnu.doc_scanner_app"
+                  minSdk = 21
+                  targetSdk = flutter.targetSdkVersion
+                  versionCode = flutter.versionCode
+                  versionName = flutter.versionName
+              }
+
+              signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties.getProperty("keyAlias")
+                      keyPassword = keystoreProperties.getProperty("keyPassword")
+                      storeFile = file(keystoreProperties.getProperty("storeFile"))
+                      storePassword = keystoreProperties.getProperty("storePassword")
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.getByName("release")
+                      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+                  }
+              }
+          }
+
+          flutter {
+              source = "../.."
+          }
+          EOF
+
           flutter build apk --release
+
       - uses: actions/upload-artifact@v4
         with:
           name: DocScanner-Pro-Android
