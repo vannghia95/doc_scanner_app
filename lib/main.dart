@@ -418,9 +418,9 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   Future<String> _ocrSinglePageWithAI(int idx, String apiKey) async {
     final comp = await FlutterImageCompress.compressWithFile(
       widget.doc.imagePaths[idx],
-      minWidth: 1100,
-      minHeight: 1100,
-      quality: 68,
+      minWidth: 1350,
+      minHeight: 1350,
+      quality: 75,
     );
     final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
     final res = await http.post(
@@ -428,17 +428,29 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'contents': [{'parts': [
-          {'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh (giữ đúng dấu tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về văn bản.'},
+          {'text': 'Hãy đọc và chép lại toàn bộ chữ có trong ảnh trang sách này (giữ chính xác từng dấu thanh tiếng Việt và chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ xuất nội dung văn bản.'},
           {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
         ]}],
         'generationConfig': {
           'temperature': 0.1,
-          'thinkingConfig': {'thinkingBudget': 0}
+          'maxOutputTokens': 4096
         }
       }),
     );
     if (res.statusCode == 200) {
-      return (jsonDecode(res.body)['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '').toString().trim();
+      final data = jsonDecode(res.body);
+      final parts = data['candidates']?[0]?['content']?['parts'] as List? ?? [];
+      final textBuf = StringBuffer();
+      for (final p in parts) {
+        if (p is Map && p['text'] != null && p['thought'] != true) {
+          textBuf.write(p['text'].toString());
+        }
+      }
+      final extracted = textBuf.toString().trim();
+      if (extracted.isEmpty) {
+        return 'Phản hồi thô từ AI (để kiểm tra): ${res.body}';
+      }
+      return extracted;
     } else {
       throw Exception('Lỗi API (${res.statusCode}): ${res.body}');
     }
