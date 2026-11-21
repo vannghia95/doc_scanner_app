@@ -40,8 +40,19 @@ jobs:
         run: |
           mkdir temp_app && cd temp_app
           flutter create --project-name doc_scanner_app --org vn.edu.vnu .
-          flutter pub add cunning_document_scanner google_mlkit_text_recognition flutter_image_compress image http package_info_plus open_filex image_cropper pdf share_plus path_provider
+          flutter pub add cunning_document_scanner google_mlkit_text_recognition flutter_image_compress image http package_info_plus open_filex image_cropper flutter_tesseract_ocr pdf share_plus path_provider
           cp ../lib/main.dart lib/main.dart
+          mkdir -p assets/tessdata
+          curl -L -o assets/tessdata/vie.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/vie.traineddata
+          echo '{"files":["vie.traineddata"]}' > assets/tessdata_config.json
+          python3 -c '
+          with open("pubspec.yaml", "r") as f:
+              y = f.read()
+          if "assets/tessdata/" not in y:
+              y = y.replace("uses-material-design: true", "uses-material-design: true\n  assets:\n    - assets/tessdata/\n    - assets/tessdata_config.json")
+          with open("pubspec.yaml", "w") as f:
+              f.write(y)
+          '
           cp ../persistent_keystore/release.jks android/app/release.jks
 
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then

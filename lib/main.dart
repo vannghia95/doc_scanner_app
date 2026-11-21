@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:image_cropper/image_cropper.dart';
+import 'package:flutter_tesseract_ocr/flutter_tesseract_ocr.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
@@ -381,16 +382,55 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     }
   }
 
-  Future<String> _preprocessForOcr(String rawPath) async {
+  Future<String> _preprocessForOcr(String path) async {
     try {
-      final decoded = img.decodeImage(await File(rawPath).readAsBytes());
-      if (decoded == null) return rawPath;
-      img.Image p = decoded.width < 1600 ? img.copyResize(decoded, width: 1600) : decoded;
-      p = img.adjustColor(img.grayscale(p), contrast: 1.35, brightness: 1.05);
-      final out = '${(await getTemporaryDirectory()).path}/pre_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      await File(out).writeAsBytes(img.encodeJpg(p, quality: 92));
-      return out;
-    } catch (_) { return rawPath; }
+      final bytes = await File(path).readAsBytes();
+      var image = img.decodeImage(bytes);
+      if (image == null) return path;
+
+      // Giữ độ phân giải ~2000px để dấu hỏi/ngã/nặng không bị bết
+      if (image.width > 2000) {
+        image = img.copyResize(image, width: 2000);
+      }
+
+      // Chuyển xám -> Chuẩn hóa nền giấy về trắng tinh -> Tăng tương phản chữ đen
+      image = img.grayscale(image);
+      image = img.normalize(image, min: 0, max: 255);
+      image = img.adjustColor(image, contrast: 1.55, brightness: 1.05);
+
+      final tmp = File('${(await getTemporaryDirectory()).path}/ocr_clean_${DateTime.now().microsecondsSinceEpoch}.jpg');
+      await tmp.writeAsBytes(img.encodeJpg(image, quality: 92));
+      return tmp.path;
+    } catch (_) {
+      return path;
+    }
+  }
+
+  Future<String> _runOfflineOcrOnPage(String imagePath) async {
+    final cleanPath = await _preprocessForOcr(imagePath);
+    if (!_useChineseScript) {
+      try {
+        final tessText = await FlutterTesseractOcr.extractText(
+          cleanPath,
+          language: 'vie',
+          args: {
+            'psm': '6',
+            'preserve_interword_spaces': '1',
+          },
+        );
+        if (tessText.trim().isNotEmpty) {
+          return tessText.trim();
+        }
+      } catch (_) {}
+    }
+    // Dự phòng hoặc khi chọn chế độ chữ Hán -> dùng ML Kit
+    final rec = TextRecognizer(script: _useChineseScript ? TextRecognitionScript.chinese : TextRecognitionScript.latin);
+    try {
+      final res = await rec.processImage(InputImage.fromFilePath(cleanPath));
+      return res.text.trim();
+    } finally {
+      await rec.close();
+    }
   }
 
   Future<void> _recognizeOffline({int? pageIdx}) async {
