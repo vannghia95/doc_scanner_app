@@ -7,132 +7,189 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image/image.dart' as img;
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-void main() {
-  runApp(const DocScannerApp());
-}
+const String kGithubOwner = 'vannghia95';
+const String kGithubRepo = 'doc_scanner_app';
+const String kDefaultApiKey = 'AQ.Ab8RN6L4bQL4_xgEDfIn5hVrgSo38XqIoL3yiuvwTpuya1JIBg';
+
+void main() => runApp(const DocScannerApp());
 
 class DocScannerApp extends StatelessWidget {
   const DocScannerApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Doc Scanner Pro',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-        useMaterial3: true,
-      ),
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal), useMaterial3: true),
       home: const DocumentListScreen(),
     );
   }
 }
 
 class ScannedDoc {
-  String id;
-  String title;
+  String id, title;
   DateTime createdAt;
   List<String> imagePaths;
-
-  ScannedDoc({
-    required this.id,
-    required this.title,
-    required this.createdAt,
-    required this.imagePaths,
-  });
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'createdAt': createdAt.toIso8601String(),
-        'imagePaths': imagePaths,
-      };
-
-  factory ScannedDoc.fromJson(Map<String, dynamic> json) => ScannedDoc(
-        id: json['id'],
-        title: json['title'],
-        createdAt: DateTime.parse(json['createdAt']),
-        imagePaths: List<String>.from(json['imagePaths']),
-      );
+  ScannedDoc({required this.id, required this.title, required this.createdAt, required this.imagePaths});
+  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'createdAt': createdAt.toIso8601String(), 'imagePaths': imagePaths};
+  factory ScannedDoc.fromJson(Map<String, dynamic> j) => ScannedDoc(
+      id: j['id'], title: j['title'], createdAt: DateTime.parse(j['createdAt']), imagePaths: List<String>.from(j['imagePaths']));
 }
 
 class StorageService {
   static Future<Directory> get _docsDir async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${appDir.path}/scanned_docs');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
+    final d = Directory('${(await getApplicationDocumentsDirectory()).path}/scanned_docs');
+    if (!await d.exists()) await d.create(recursive: true);
+    return d;
   }
-
-  static Future<File> get _indexFile async {
-    final dir = await _docsDir;
-    return File('${dir.path}/index.json');
-  }
-
-  static Future<File> get _apiKeyFile async {
-    final dir = await _docsDir;
-    return File('${dir.path}/gemini_key.txt');
-  }
+  static Future<File> get _indexFile async => File('${(await _docsDir).path}/index.json');
+  static Future<File> get _apiKeyFile async => File('${(await _docsDir).path}/gemini_key.txt');
 
   static Future<String> getApiKey() async {
     try {
       final f = await _apiKeyFile;
-      if (await f.exists()) return (await f.readAsString()).trim();
+      if (await f.exists()) {
+        final s = (await f.readAsString()).trim();
+        if (s.isNotEmpty) return s;
+      }
     } catch (_) {}
-    return '';
+    return kDefaultApiKey;
   }
 
-  static Future<void> saveApiKey(String key) async {
-    final f = await _apiKeyFile;
-    await f.writeAsString(key.trim());
-  }
+  static Future<void> saveApiKey(String key) async => (await _apiKeyFile).writeAsString(key.trim());
 
   static Future<List<ScannedDoc>> loadDocs() async {
     try {
-      final file = await _indexFile;
-      if (!await file.exists()) return [];
-      final content = await file.readAsString();
-      final List<dynamic> decoded = jsonDecode(content);
-      final docs = decoded.map((e) => ScannedDoc.fromJson(e)).toList();
+      final f = await _indexFile;
+      if (!await f.exists()) return [];
+      final docs = (jsonDecode(await f.readAsString()) as List).map((e) => ScannedDoc.fromJson(e)).toList();
       docs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       return docs;
-    } catch (_) {
-      return [];
-    }
+    } catch (_) { return []; }
   }
 
-  static Future<void> saveDocs(List<ScannedDoc> docs) async {
-    final file = await _indexFile;
-    final encoded = jsonEncode(docs.map((e) => e.toJson()).toList());
-    await file.writeAsString(encoded);
-  }
+  static Future<void> saveDocs(List<ScannedDoc> docs) async =>
+      (await _indexFile).writeAsString(jsonEncode(docs.map((e) => e.toJson()).toList()));
 
   static Future<List<String>> persistImages(List<String> tempPaths) async {
     final dir = await _docsDir;
-    final List<String> savedPaths = [];
+    final List<String> saved = [];
     for (int i = 0; i < tempPaths.length; i++) {
-      final file = File(tempPaths[i]);
-      if (await file.exists()) {
-        final newPath =
-            '${dir.path}/img_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
-        await file.copy(newPath);
-        savedPaths.add(newPath);
+      final f = File(tempPaths[i]);
+      if (await f.exists()) {
+        final p = '${dir.path}/img_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
+        await f.copy(p);
+        saved.add(p);
       }
     }
-    return savedPaths;
+    return saved;
   }
 }
 
+class AppUpdateService {
+  static bool _isNewer(String latest, String current) {
+    final l = latest.replaceAll(RegExp(r'[^0-9.]'), '').split('.');
+    final c = current.replaceAll(RegExp(r'[^0-9.]'), '').split('.');
+    for (int i = 0; i < 3; i++) {
+      final lv = i < l.length ? int.tryParse(l[i]) ?? 0 : 0;
+      final cv = i < c.length ? int.tryParse(c[i]) ?? 0 : 0;
+      if (lv > cv) return true;
+      if (lv < cv) return false;
+    }
+    return false;
+  }
+
+  static Future<void> checkForUpdates(BuildContext context, {bool silent = false}) async {
+    try {
+      final curVer = (await PackageInfo.fromPlatform()).version;
+      final res = await http.get(Uri.parse('https://api.github.com/repos/$kGithubOwner/$kGithubRepo/releases/latest'));
+      if (res.statusCode != 200) {
+        if (!silent && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Đang dùng bản v$curVer (Chưa có bản phát hành mới)')));
+        }
+        return;
+      }
+      final data = jsonDecode(res.body);
+      final tag = (data['tag_name'] ?? '').toString();
+      final notes = (data['body'] ?? 'Cập nhật tính năng mới.').toString();
+      final asset = (data['assets'] as List? ?? []).firstWhere((a) => (a['name'] ?? '').toString().endsWith('.apk'), orElse: () => null);
+      if (asset != null && _isNewer(tag, curVer) && context.mounted) {
+        _showDialog(context, curVer, tag, notes, asset['browser_download_url']);
+      } else if (!silent && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Bạn đang dùng bản mới nhất (v$curVer)!')));
+      }
+    } catch (e) {
+      if (!silent && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi kiểm tra cập nhật: $e')));
+      }
+    }
+  }
+
+  static void _showDialog(BuildContext context, String curVer, String newVer, String notes, String url) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        bool downloading = false;
+        double progress = 0;
+        String status = '';
+        return StatefulBuilder(builder: (context, setS) {
+          return AlertDialog(
+            title: Text('Có bản cập nhật mới ($newVer)'),
+            content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Bản hiện tại: v$curVer', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+              const SizedBox(height: 8),
+              Text(notes, style: const TextStyle(fontSize: 13)),
+              if (downloading) ...[
+                const SizedBox(height: 14),
+                LinearProgressIndicator(value: progress > 0 ? progress : null),
+                const SizedBox(height: 6),
+                Text(status, style: const TextStyle(fontSize: 12)),
+              ]
+            ]),
+            actions: [
+              if (!downloading) TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Để sau')),
+              FilledButton(
+                onPressed: downloading ? null : () async {
+                  setS(() { downloading = true; status = 'Đang tải bản cập nhật...'; });
+                  try {
+                    final client = http.Client();
+                    final req = await client.send(http.Request('GET', Uri.parse(url)));
+                    final total = req.contentLength ?? 0;
+                    final file = File('${(await getTemporaryDirectory()).path}/update_$newVer.apk');
+                    final sink = file.openWrite();
+                    int got = 0;
+                    await for (final chunk in req.stream) {
+                      sink.add(chunk);
+                      got += chunk.length;
+                      if (total > 0) setS(() { progress = got / total; status = 'Đang tải: ${(progress * 100).toStringAsFixed(0)}%'; });
+                    }
+                    await sink.close();
+                    client.close();
+                    await OpenFilex.open(file.path);
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  } catch (e) {
+                    setS(() { downloading = false; status = 'Lỗi tải: $e'; });
+                  }
+                },
+                child: const Text('Cập nhật ngay'),
+              )
+            ],
+          );
+        });
+      },
+    );
+  }
+}
 class DocumentListScreen extends StatefulWidget {
   const DocumentListScreen({super.key});
-
   @override
   State<DocumentListScreen> createState() => _DocumentListScreenState();
 }
@@ -140,70 +197,48 @@ class DocumentListScreen extends StatefulWidget {
 class _DocumentListScreenState extends State<DocumentListScreen> {
   List<ScannedDoc> _docs = [];
   bool _isLoading = true;
+  String _appVersion = '';
 
   @override
   void initState() {
     super.initState();
-    _refreshDocs();
+    _initApp();
+  }
+
+  Future<void> _initApp() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) setState(() => _appVersion = 'v${info.version}');
+    await _refreshDocs();
+    if (mounted) AppUpdateService.checkForUpdates(context, silent: true);
   }
 
   Future<void> _refreshDocs() async {
     final docs = await StorageService.loadDocs();
-    if (mounted) {
-      setState(() {
-        _docs = docs;
-        _isLoading = false;
-      });
-    }
+    if (mounted) setState(() { _docs = docs; _isLoading = false; });
   }
 
   Future<void> _createNewScan() async {
     try {
-      List<String>? pictures = await CunningDocumentScanner.getPictures(
-        noOfPages: 30,
-        isGalleryImportAllowed: true,
-      );
-
-      if (pictures != null && pictures.isNotEmpty) {
-        final savedPaths = await StorageService.persistImages(pictures);
+      final pics = await CunningDocumentScanner.getPictures(noOfPages: 30, isGalleryImportAllowed: true);
+      if (pics != null && pics.isNotEmpty) {
+        final saved = await StorageService.persistImages(pics);
         final now = DateTime.now();
-        final defaultTitle =
-            'Tài liệu ${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-
-        final newDoc = ScannedDoc(
-          id: now.millisecondsSinceEpoch.toString(),
-          title: defaultTitle,
-          createdAt: now,
-          imagePaths: savedPaths,
-        );
-
-        _docs.insert(0, newDoc);
+        final title = 'Tài liệu ${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+        final doc = ScannedDoc(id: now.millisecondsSinceEpoch.toString(), title: title, createdAt: now, imagePaths: saved);
+        _docs.insert(0, doc);
         await StorageService.saveDocs(_docs);
         setState(() {});
-
         if (!mounted) return;
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => DocumentDetailScreen(
-              doc: newDoc,
-              onUpdate: () =>
-                  StorageService.saveDocs(_docs).then((_) => _refreshDocs()),
-            ),
-          ),
-        );
+        await Navigator.push(context, MaterialPageRoute(builder: (_) => DocumentDetailScreen(doc: doc, onUpdate: () => StorageService.saveDocs(_docs).then((_) => _refreshDocs()))));
       }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Lỗi khi quét: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi quét: $e')));
     }
   }
 
   Future<void> _deleteDoc(int index) async {
-    final doc = _docs[index];
-    for (final path in doc.imagePaths) {
-      final f = File(path);
+    for (final p in _docs[index].imagePaths) {
+      final f = File(p);
       if (await f.exists()) await f.delete();
     }
     _docs.removeAt(index);
@@ -212,75 +247,39 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   }
 
   Future<void> _renameDoc(int index) async {
-    final controller = TextEditingController(text: _docs[index].title);
-    final newName = await showDialog<String>(
+    final ctrl = TextEditingController(text: _docs[index].title);
+    final name = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('Đổi tên tài liệu'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
-        ),
+        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(border: OutlineInputBorder())),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Hủy')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
-              child: const Text('Lưu')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Lưu')),
         ],
       ),
     );
-
-    if (newName != null && newName.isNotEmpty) {
-      setState(() => _docs[index].title = newName);
+    if (name != null && name.isNotEmpty) {
+      setState(() => _docs[index].title = name);
       await StorageService.saveDocs(_docs);
     }
   }
 
   Future<void> _configureApiKey() async {
-    final currentKey = await StorageService.getApiKey();
-    final controller = TextEditingController(text: currentKey);
+    final ctrl = TextEditingController(text: await StorageService.getApiKey());
     if (!mounted) return;
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cài đặt Gemini AI OCR'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Nhập Gemini API Key (miễn phí tại aistudio.google.com) để nhận diện tiếng Việt có dấu & Hán-Nôm chuẩn xác 99%:',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: 'AIzaSy...',
-              ),
-            ),
-          ],
-        ),
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cài đặt AI OCR API Key'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'Nhập API Key...')),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Đóng')),
-          FilledButton(
-            onPressed: () async {
-              await StorageService.saveApiKey(controller.text);
-              if (context.mounted) Navigator.pop(context);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Đã lưu Gemini API Key!')),
-                );
-              }
-            },
-            child: const Text('Lưu Key'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng')),
+          FilledButton(onPressed: () async {
+            await StorageService.saveApiKey(ctrl.text);
+            if (ctx.mounted) Navigator.pop(ctx);
+            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã lưu API Key!')));
+          }, child: const Text('Lưu')),
         ],
       ),
     );
@@ -290,116 +289,56 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Kho Tài Liệu Scan'),
+        title: Row(children: [
+          const Text('Kho Tài Liệu'),
+          if (_appVersion.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(color: Colors.teal.shade700, borderRadius: BorderRadius.circular(8)),
+              child: Text(_appVersion, style: const TextStyle(color: Colors.white, fontSize: 11)),
+            ),
+          ],
+        ]),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.key),
-            tooltip: 'Cài đặt API Key AI OCR',
-            onPressed: _configureApiKey,
-          ),
+          IconButton(icon: const Icon(Icons.system_update), tooltip: 'Kiểm tra cập nhật', onPressed: () => AppUpdateService.checkForUpdates(context, silent: false)),
+          IconButton(icon: const Icon(Icons.key), tooltip: 'API Key', onPressed: _configureApiKey),
         ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _docs.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.folder_open_outlined,
-                          size: 80, color: Colors.grey[400]),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Chưa có tài liệu nào được lưu',
-                        style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Bấm nút bên dưới để bắt đầu quét',
-                        style: TextStyle(fontSize: 13, color: Colors.grey[500]),
-                      ),
-                    ],
-                  ),
-                )
+              ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Icon(Icons.folder_open_outlined, size: 80, color: Colors.grey[400]),
+                  const SizedBox(height: 16),
+                  Text('Chưa có tài liệu nào được lưu', style: TextStyle(fontSize: 16, color: Colors.grey[600])),
+                ]))
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
                   itemCount: _docs.length,
                   itemBuilder: (context, index) {
                     final doc = _docs[index];
-                    final thumbPath =
-                        doc.imagePaths.isNotEmpty ? doc.imagePaths.first : null;
+                    final thumb = doc.imagePaths.isNotEmpty ? doc.imagePaths.first : null;
                     return Card(
                       margin: const EdgeInsets.only(bottom: 10),
                       child: ListTile(
-                        contentPadding: const EdgeInsets.all(10),
                         leading: ClipRRect(
                           borderRadius: BorderRadius.circular(6),
-                          child: thumbPath != null && File(thumbPath).existsSync()
-                              ? Image.file(
-                                  File(thumbPath),
-                                  width: 52,
-                                  height: 68,
-                                  fit: BoxFit.cover,
-                                )
-                              : Container(
-                                  width: 52,
-                                  height: 68,
-                                  color: Colors.teal.shade50,
-                                  child: const Icon(Icons.description,
-                                      color: Colors.teal),
-                                ),
+                          child: thumb != null && File(thumb).existsSync()
+                              ? Image.file(File(thumb), width: 50, height: 66, fit: BoxFit.cover)
+                              : Container(width: 50, height: 66, color: Colors.teal.shade50, child: const Icon(Icons.description, color: Colors.teal)),
                         ),
-                        title: Text(
-                          doc.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(
-                            '${doc.imagePaths.length} trang • ${doc.createdAt.day}/${doc.createdAt.month}/${doc.createdAt.year}',
-                            style: TextStyle(
-                                fontSize: 13, color: Colors.grey[600]),
-                          ),
-                        ),
+                        title: Text(doc.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text('${doc.imagePaths.length} trang • ${doc.createdAt.day}/${doc.createdAt.month}/${doc.createdAt.year}'),
                         trailing: PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'rename') _renameDoc(index);
-                            if (value == 'delete') _deleteDoc(index);
-                          },
-                          itemBuilder: (context) => [
-                            const PopupMenuItem(
-                                value: 'rename',
-                                child: Row(children: [
-                                  Icon(Icons.edit, size: 18),
-                                  SizedBox(width: 8),
-                                  Text('Đổi tên')
-                                ])),
-                            const PopupMenuItem(
-                                value: 'delete',
-                                child: Row(children: [
-                                  Icon(Icons.delete,
-                                      size: 18, color: Colors.red),
-                                  SizedBox(width: 8),
-                                  Text('Xóa',
-                                      style: TextStyle(color: Colors.red))
-                                ])),
+                          onSelected: (v) { if (v == 'rename') _renameDoc(index); if (v == 'delete') _deleteDoc(index); },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'rename', child: Text('Đổi tên')),
+                            PopupMenuItem(value: 'delete', child: Text('Xóa', style: TextStyle(color: Colors.red))),
                           ],
                         ),
-                        onTap: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => DocumentDetailScreen(
-                                doc: doc,
-                                onUpdate: () => StorageService.saveDocs(_docs)
-                                    .then((_) => _refreshDocs()),
-                              ),
-                            ),
-                          );
-                        },
+                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DocumentDetailScreen(doc: doc, onUpdate: () => StorageService.saveDocs(_docs).then((_) => _refreshDocs())))),
                       ),
                     );
                   },
@@ -414,17 +353,10 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     );
   }
 }
-
 class DocumentDetailScreen extends StatefulWidget {
   final ScannedDoc doc;
   final VoidCallback onUpdate;
-
-  const DocumentDetailScreen({
-    super.key,
-    required this.doc,
-    required this.onUpdate,
-  });
-
+  const DocumentDetailScreen({super.key, required this.doc, required this.onUpdate});
   @override
   State<DocumentDetailScreen> createState() => _DocumentDetailScreenState();
 }
@@ -432,353 +364,156 @@ class DocumentDetailScreen extends StatefulWidget {
 class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   bool _isExporting = false;
   bool _isRecognizing = false;
-  String _loadingMessage = 'Đang nhận diện văn bản...';
+  String _loadingMessage = 'Đang xử lý...';
   bool _useChineseScript = false;
 
   Future<void> _scanMorePages() async {
     try {
-      List<String>? pictures = await CunningDocumentScanner.getPictures(
-        noOfPages: 20,
-        isGalleryImportAllowed: true,
-      );
-      if (pictures != null && pictures.isNotEmpty) {
-        final savedPaths = await StorageService.persistImages(pictures);
-        setState(() {
-          widget.doc.imagePaths.addAll(savedPaths);
-        });
+      final pics = await CunningDocumentScanner.getPictures(noOfPages: 20, isGalleryImportAllowed: true);
+      if (pics != null && pics.isNotEmpty) {
+        final saved = await StorageService.persistImages(pics);
+        setState(() => widget.doc.imagePaths.addAll(saved));
         widget.onUpdate();
       }
     } catch (e) {
-      _showSnackBar('Lỗi quét thêm: $e');
+      _showSnack('Lỗi quét thêm: $e');
     }
   }
 
-  // Tiền xử lý ảnh: Chuyển thang xám & tăng tương phản để ML Kit bắt dấu tiếng Việt rõ hơn
-  Future<String> _preprocessImageForOcr(String rawPath) async {
+  Future<String> _preprocessForOcr(String rawPath) async {
     try {
-      final bytes = await File(rawPath).readAsBytes();
-      final decoded = img.decodeImage(bytes);
+      final decoded = img.decodeImage(await File(rawPath).readAsBytes());
       if (decoded == null) return rawPath;
-
-      // Phóng to nhẹ nếu ảnh nhỏ để tách rõ dấu thanh (hỏi, ngã, nặng)
-      img.Image processed = decoded;
-      if (decoded.width < 1600) {
-        processed = img.copyResize(decoded, width: 1600);
-      }
-
-      // Chuyển sang đen trắng xám và tăng độ tương phản (contrast = 135)
-      processed = img.grayscale(processed);
-      processed = img.adjustColor(processed, contrast: 1.35, brightness: 1.05);
-
-      final tempDir = await getTemporaryDirectory();
-      final outPath =
-          '${tempDir.path}/ocr_pre_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      await File(outPath).writeAsBytes(img.encodeJpg(processed, quality: 92));
-      return outPath;
-    } catch (_) {
-      return rawPath;
-    }
+      img.Image p = decoded.width < 1600 ? img.copyResize(decoded, width: 1600) : decoded;
+      p = img.adjustColor(img.grayscale(p), contrast: 1.35, brightness: 1.05);
+      final out = '${(await getTemporaryDirectory()).path}/pre_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await File(out).writeAsBytes(img.encodeJpg(p, quality: 92));
+      return out;
+    } catch (_) { return rawPath; }
   }
 
-  // OCR Offline có tiền xử lý ảnh
-  Future<void> _recognizeTextOffline({int? singlePageIndex}) async {
+  Future<void> _recognizeOffline({int? pageIdx}) async {
     if (widget.doc.imagePaths.isEmpty) return;
-
-    setState(() {
-      _isRecognizing = true;
-      _loadingMessage = 'Đang tối ưu ảnh & đọc chữ Offline...';
-    });
-
-    final recognizer = TextRecognizer(
-      script: _useChineseScript
-          ? TextRecognitionScript.chinese
-          : TextRecognitionScript.latin,
-    );
-
+    setState(() { _isRecognizing = true; _loadingMessage = 'Đang tối ưu ảnh & đọc chữ Offline...'; });
+    final rec = TextRecognizer(script: _useChineseScript ? TextRecognitionScript.chinese : TextRecognitionScript.latin);
     try {
-      final StringBuffer buffer = StringBuffer();
-
-      if (singlePageIndex != null) {
-        final enhancedPath =
-            await _preprocessImageForOcr(widget.doc.imagePaths[singlePageIndex]);
-        final inputImage = InputImage.fromFilePath(enhancedPath);
-        final recognized = await recognizer.processImage(inputImage);
-        buffer.writeln(recognized.text);
-      } else {
-        for (int i = 0; i < widget.doc.imagePaths.length; i++) {
-          final enhancedPath =
-              await _preprocessImageForOcr(widget.doc.imagePaths[i]);
-          final inputImage = InputImage.fromFilePath(enhancedPath);
-          final recognized = await recognizer.processImage(inputImage);
-          buffer.writeln('--- TRANG ${i + 1} ---');
-          buffer.writeln(recognized.text);
-          buffer.writeln();
-        }
+      final buf = StringBuffer();
+      final indices = pageIdx != null ? [pageIdx] : List.generate(widget.doc.imagePaths.length, (i) => i);
+      for (final i in indices) {
+        final res = await rec.processImage(InputImage.fromFilePath(await _preprocessForOcr(widget.doc.imagePaths[i])));
+        if (indices.length > 1) buf.writeln('--- TRANG ${i + 1} ---');
+        buf.writeln(res.text);
+        buf.writeln();
       }
-
-      final resultText = buffer.toString().trim();
       if (!mounted) return;
-
-      _showExtractedTextSheet(
-        title: singlePageIndex != null
-            ? 'OCR Offline - Trang ${singlePageIndex + 1}'
-            : 'OCR Offline (${widget.doc.imagePaths.length} trang)',
-        text: resultText.isEmpty
-            ? 'Không tìm thấy chữ. Thử dùng nút "AI OCR" để nhận diện chính xác hơn.'
-            : resultText,
-      );
+      _showTextSheet(pageIdx != null ? 'OCR Offline - Trang ${pageIdx + 1}' : 'OCR Offline (${indices.length} trang)', buf.toString().trim());
     } catch (e) {
-      _showSnackBar('Lỗi OCR: $e');
+      _showSnack('Lỗi OCR: $e');
     } finally {
-      await recognizer.close();
+      await rec.close();
       if (mounted) setState(() => _isRecognizing = false);
     }
   }
 
-  // OCR Siêu chuẩn bằng Gemini AI (Tiếng Việt có dấu & Hán-Nôm)
-  Future<void> _recognizeTextWithGeminiAI({int? singlePageIndex}) async {
+  Future<void> _recognizeWithAI({int? pageIdx}) async {
     final apiKey = await StorageService.getApiKey();
-    if (apiKey.isEmpty) {
-      _showSnackBar(
-          'Vui lòng bấm biểu tượng Chìa khóa ở màn hình chính để nhập Gemini API Key trước.');
-      return;
-    }
-
-    setState(() {
-      _isRecognizing = true;
-      _loadingMessage = 'Gemini AI đang đọc chính xác từng dấu thanh...';
-    });
-
+    if (apiKey.isEmpty) { _showSnack('Chưa có API Key.'); return; }
+    setState(() { _isRecognizing = true; _loadingMessage = 'AI đang đọc chính xác từng dấu thanh...'; });
     try {
-      final List<int> targetIndices = singlePageIndex != null
-          ? [singlePageIndex]
-          : List.generate(widget.doc.imagePaths.length, (i) => i);
-
-      final StringBuffer buffer = StringBuffer();
-
-      for (final idx in targetIndices) {
-        final compressedBytes = await FlutterImageCompress.compressWithFile(
-          widget.doc.imagePaths[idx],
-          minWidth: 1600,
-          minHeight: 1600,
-          quality: 85,
-        );
-        final bytes =
-            compressedBytes ?? await File(widget.doc.imagePaths[idx]).readAsBytes();
-        final base64Img = base64Encode(bytes);
-
-        final url = Uri.parse(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey');
-
-        final response = await http.post(
-          url,
+      final indices = pageIdx != null ? [pageIdx] : List.generate(widget.doc.imagePaths.length, (i) => i);
+      final buf = StringBuffer();
+      for (final idx in indices) {
+        final comp = await FlutterImageCompress.compressWithFile(widget.doc.imagePaths[idx], minWidth: 1600, minHeight: 1600, quality: 85);
+        final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
+        final res = await http.post(
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'contents': [
-              {
-                'parts': [
-                  {
-                    'text':
-                        'Hãy trích xuất chính xác toàn bộ văn bản trong ảnh tài liệu này (giữ đúng từng dấu thanh tiếng Việt, chữ Hán nếu có, và ngắt đoạn tự nhiên). Chỉ trả về nội dung văn bản, không thêm lời bình luận.'
-                  },
-                  {
-                    'inline_data': {
-                      'mime_type': 'image/jpeg',
-                      'data': base64Img,
-                    }
-                  }
-                ]
-              }
-            ]
+            'contents': [{'parts': [
+              {'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh này (giữ đúng dấu tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về văn bản.'},
+              {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
+            ]}]
           }),
         );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final text = data['candidates']?[0]?['content']?['parts']?[0]
-                  ?['text'] ??
-              '';
-          if (targetIndices.length > 1) {
-            buffer.writeln('--- TRANG ${idx + 1} ---');
-          }
-          buffer.writeln(text.toString().trim());
-          buffer.writeln();
+        if (res.statusCode == 200) {
+          final txt = jsonDecode(res.body)['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
+          if (indices.length > 1) buf.writeln('--- TRANG ${idx + 1} ---');
+          buf.writeln(txt.toString().trim());
+          buf.writeln();
         } else {
-          throw Exception('Lỗi API (${response.statusCode}): ${response.body}');
+          throw Exception('Lỗi API (${res.statusCode})');
         }
       }
-
       if (!mounted) return;
-      _showExtractedTextSheet(
-        title: singlePageIndex != null
-            ? 'AI OCR - Trang ${singlePageIndex + 1}'
-            : 'AI OCR (${widget.doc.imagePaths.length} trang)',
-        text: buffer.toString().trim(),
-      );
+      _showTextSheet(pageIdx != null ? 'AI OCR - Trang ${pageIdx + 1}' : 'AI OCR (${indices.length} trang)', buf.toString().trim());
     } catch (e) {
-      _showSnackBar('Lỗi AI OCR: $e');
+      _showSnack('Lỗi AI OCR: $e');
     } finally {
       if (mounted) setState(() => _isRecognizing = false);
     }
   }
 
-  void _showExtractedTextSheet({required String title, required String text}) {
-    final textController = TextEditingController(text: text);
-
+  void _showTextSheet(String title, String text) {
+    final ctrl = TextEditingController(text: text.isEmpty ? 'Không tìm thấy văn bản.' : text);
     showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-          ),
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.78,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(title,
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold)),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const Divider(),
-                Expanded(
-                  child: TextField(
-                    controller: textController,
-                    maxLines: null,
-                    expands: true,
-                    textAlignVertical: TextAlignVertical.top,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'Nội dung văn bản...',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Clipboard.setData(
-                              ClipboardData(text: textController.text));
-                          Navigator.pop(context);
-                          _showSnackBar('Đã sao chép vào bộ nhớ tạm!');
-                        },
-                        icon: const Icon(Icons.copy, size: 18),
-                        label: const Text('Copy'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          final dir = await getTemporaryDirectory();
-                          final txtFile = File(
-                              '${dir.path}/${widget.doc.title.replaceAll(RegExp(r'[^\w\s-]'), '_')}.txt');
-                          await txtFile.writeAsString(textController.text);
-                          await Share.shareXFiles([XFile(txtFile.path)]);
-                        },
-                        icon: const Icon(Icons.description, size: 18),
-                        label: const Text('File .TXT'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () => Share.share(textController.text),
-                        icon: const Icon(Icons.share, size: 18),
-                        label: const Text('Gửi'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      context: context, isScrollControlled: true, useSafeArea: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(left: 16, right: 16, top: 16, bottom: MediaQuery.of(ctx).viewInsets.bottom + 16),
+        child: SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.78,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+            ]),
+            const Divider(),
+            Expanded(child: TextField(controller: ctrl, maxLines: null, expands: true, textAlignVertical: TextAlignVertical.top, decoration: const InputDecoration(border: OutlineInputBorder()))),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: OutlinedButton.icon(onPressed: () { Clipboard.setData(ClipboardData(text: ctrl.text)); Navigator.pop(ctx); _showSnack('Đã sao chép!'); }, icon: const Icon(Icons.copy, size: 18), label: const Text('Copy'))),
+              const SizedBox(width: 8),
+              Expanded(child: OutlinedButton.icon(onPressed: () async {
+                final f = File('${(await getTemporaryDirectory()).path}/${widget.doc.title.replaceAll(RegExp(r'[^\w\s-]'), '_')}.txt');
+                await f.writeAsString(ctrl.text);
+                await Share.shareXFiles([XFile(f.path)]);
+              }, icon: const Icon(Icons.description, size: 18), label: const Text('File .TXT'))),
+              const SizedBox(width: 8),
+              Expanded(child: FilledButton.icon(onPressed: () => Share.share(ctrl.text), icon: const Icon(Icons.share, size: 18), label: const Text('Gửi'))),
+            ]),
+          ]),
+        ),
+      ),
     );
   }
 
-  Future<void> _exportCompressedPdf() async {
+  Future<void> _exportPdf() async {
     if (widget.doc.imagePaths.isEmpty) return;
-
     setState(() => _isExporting = true);
-
     try {
       final pdf = pw.Document();
-
-      for (final imagePath in widget.doc.imagePaths) {
-        final compressedBytes = await FlutterImageCompress.compressWithFile(
-          imagePath,
-          minWidth: 1500,
-          minHeight: 1500,
-          quality: 80,
-        );
-
-        final finalBytes =
-            compressedBytes ?? await File(imagePath).readAsBytes();
-        final pdfImage = pw.MemoryImage(finalBytes);
-
-        pdf.addPage(
-          pw.Page(
-            pageFormat: PdfPageFormat.a4,
-            margin: const pw.EdgeInsets.all(10),
-            build: (pw.Context context) {
-              return pw.Center(
-                child: pw.Image(pdfImage, fit: pw.BoxFit.contain),
-              );
-            },
-          ),
-        );
+      for (final p in widget.doc.imagePaths) {
+        final comp = await FlutterImageCompress.compressWithFile(p, minWidth: 1500, minHeight: 1500, quality: 80);
+        final imgMem = pw.MemoryImage(comp ?? await File(p).readAsBytes());
+        pdf.addPage(pw.Page(pageFormat: PdfPageFormat.a4, margin: const pw.EdgeInsets.all(10), build: (_) => pw.Center(child: pw.Image(imgMem, fit: pw.BoxFit.contain))));
       }
-
-      final outputDir = await getTemporaryDirectory();
-      final safeName =
-          widget.doc.title.replaceAll(RegExp(r'[^\w\s-]'), '_').trim();
-      final pdfFile = File('${outputDir.path}/$safeName.pdf');
-      await pdfFile.writeAsBytes(await pdf.save());
-
-      await Share.shareXFiles(
-        [XFile(pdfFile.path)],
-        text: '${widget.doc.title} (${widget.doc.imagePaths.length} trang)',
-      );
+      final f = File('${(await getTemporaryDirectory()).path}/${widget.doc.title.replaceAll(RegExp(r'[^\w\s-]'), '_')}.pdf');
+      await f.writeAsBytes(await pdf.save());
+      await Share.shareXFiles([XFile(f.path)], text: widget.doc.title);
     } catch (e) {
-      _showSnackBar('Lỗi xuất PDF: $e');
+      _showSnack('Lỗi xuất PDF: $e');
     } finally {
       if (mounted) setState(() => _isExporting = false);
     }
   }
 
   Future<void> _removePage(int index) async {
-    final path = widget.doc.imagePaths[index];
-    final f = File(path);
+    final f = File(widget.doc.imagePaths[index]);
     if (await f.exists()) await f.delete();
-
-    setState(() {
-      widget.doc.imagePaths.removeAt(index);
-    });
+    setState(() => widget.doc.imagePaths.removeAt(index));
     widget.onUpdate();
   }
 
-  void _showSnackBar(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  void _showSnack(String m) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); }
 
   @override
   Widget build(BuildContext context) {
@@ -787,177 +522,39 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         title: Text(widget.doc.title, style: const TextStyle(fontSize: 15)),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          TextButton(
-            onPressed: () {
-              setState(() => _useChineseScript = !_useChineseScript);
-              _showSnackBar(_useChineseScript
-                  ? 'Offline OCR: Chữ Hán / Trung / Nhật'
-                  : 'Offline OCR: Tiếng Việt / Anh');
-            },
-            child: Text(_useChineseScript ? 'Hán' : 'Việt',
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-          ),
-          IconButton(
-            icon: const Icon(Icons.text_snippet_outlined),
-            tooltip: 'Đọc chữ Offline (Toàn bộ)',
-            onPressed: _isRecognizing ? null : () => _recognizeTextOffline(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.auto_awesome, color: Colors.deepPurple),
-            tooltip: 'AI OCR Siêu chuẩn (Toàn bộ)',
-            onPressed:
-                _isRecognizing ? null : () => _recognizeTextWithGeminiAI(),
-          ),
+          TextButton(onPressed: () => setState(() => _useChineseScript = !_useChineseScript), child: Text(_useChineseScript ? 'Hán' : 'Việt', style: const TextStyle(fontWeight: FontWeight.bold))),
+          IconButton(icon: const Icon(Icons.text_snippet_outlined), onPressed: _isRecognizing ? null : () => _recognizeOffline()),
+          IconButton(icon: const Icon(Icons.auto_awesome, color: Colors.deepPurple), onPressed: _isRecognizing ? null : () => _recognizeWithAI()),
         ],
       ),
-      body: Stack(
-        children: [
-          widget.doc.imagePaths.isEmpty
-              ? const Center(child: Text('Tài liệu trống. Hãy bấm Quét thêm.'))
-              : GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 140),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                    childAspectRatio: 0.72,
-                  ),
-                  itemCount: widget.doc.imagePaths.length,
-                  itemBuilder: (context, index) {
-                    return Card(
-                      clipBehavior: Clip.antiAlias,
-                      elevation: 2,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.file(
-                            File(widget.doc.imagePaths[index]),
-                            fit: BoxFit.cover,
-                          ),
-                          Positioned(
-                            bottom: 8,
-                            left: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.black87,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                'Trang ${index + 1}',
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 12),
-                              ),
-                            ),
-                          ),
-                          // Nút AI OCR (màu tím) + Offline OCR (màu xanh) cho từng trang
-                          Positioned(
-                            bottom: 4,
-                            right: 4,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                CircleAvatar(
-                                  radius: 17,
-                                  backgroundColor: Colors.deepPurple,
-                                  child: IconButton(
-                                    padding: EdgeInsets.zero,
-                                    tooltip: 'AI OCR (Siêu chuẩn)',
-                                    icon: const Icon(Icons.auto_awesome,
-                                        size: 16, color: Colors.white),
-                                    onPressed: _isRecognizing
-                                        ? null
-                                        : () => _recognizeTextWithGeminiAI(
-                                            singlePageIndex: index),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                CircleAvatar(
-                                  radius: 17,
-                                  backgroundColor: Colors.teal,
-                                  child: IconButton(
-                                    padding: EdgeInsets.zero,
-                                    tooltip: 'OCR Offline',
-                                    icon: const Icon(Icons.text_fields,
-                                        size: 17, color: Colors.white),
-                                    onPressed: _isRecognizing
-                                        ? null
-                                        : () => _recognizeTextOffline(
-                                            singlePageIndex: index),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Positioned(
-                            top: 4,
-                            right: 4,
-                            child: CircleAvatar(
-                              radius: 16,
-                              backgroundColor: Colors.black54,
-                              child: IconButton(
-                                padding: EdgeInsets.zero,
-                                icon: const Icon(Icons.close,
-                                    size: 18, color: Colors.white),
-                                onPressed: () => _removePage(index),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-          if (_isRecognizing)
-            Container(
-              color: Colors.black45,
-              child: Center(
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(_loadingMessage, textAlign: TextAlign.center),
-                      ],
-                    ),
-                  ),
+      body: Stack(children: [
+        widget.doc.imagePaths.isEmpty
+            ? const Center(child: Text('Tài liệu trống. Hãy bấm Quét thêm.'))
+            : GridView.builder(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 140),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 0.72),
+                itemCount: widget.doc.imagePaths.length,
+                itemBuilder: (_, idx) => Card(
+                  clipBehavior: Clip.antiAlias,
+                  child: Stack(fit: StackFit.expand, children: [
+                    Image.file(File(widget.doc.imagePaths[idx]), fit: BoxFit.cover),
+                    Positioned(bottom: 8, left: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(12)), child: Text('Trang ${idx + 1}', style: const TextStyle(color: Colors.white, fontSize: 12)))),
+                    Positioned(bottom: 4, right: 4, child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      CircleAvatar(radius: 17, backgroundColor: Colors.deepPurple, child: IconButton(padding: EdgeInsets.zero, icon: const Icon(Icons.auto_awesome, size: 16, color: Colors.white), onPressed: _isRecognizing ? null : () => _recognizeWithAI(pageIdx: idx))),
+                      const SizedBox(width: 6),
+                      CircleAvatar(radius: 17, backgroundColor: Colors.teal, child: IconButton(padding: EdgeInsets.zero, icon: const Icon(Icons.text_fields, size: 17, color: Colors.white), onPressed: _isRecognizing ? null : () => _recognizeOffline(pageIdx: idx))),
+                    ])),
+                    Positioned(top: 4, right: 4, child: CircleAvatar(radius: 16, backgroundColor: Colors.black54, child: IconButton(padding: EdgeInsets.zero, icon: const Icon(Icons.close, size: 18, color: Colors.white), onPressed: () => _removePage(idx)))),
+                  ]),
                 ),
               ),
-            ),
-        ],
-      ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.extended(
-            heroTag: 'scan_more',
-            onPressed: _scanMorePages,
-            icon: const Icon(Icons.add_a_photo),
-            label: const Text('Quét thêm'),
-          ),
-          const SizedBox(height: 12),
-          FloatingActionButton.extended(
-            heroTag: 'export_pdf',
-            onPressed: _isExporting ? null : _exportCompressedPdf,
-            backgroundColor: Colors.teal,
-            foregroundColor: Colors.white,
-            icon: _isExporting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2),
-                  )
-                : const Icon(Icons.picture_as_pdf),
-            label: Text(_isExporting ? 'Đang nén & tạo PDF...' : 'Xuất PDF'),
-          ),
-        ],
-      ),
+        if (_isRecognizing) Container(color: Colors.black45, child: Center(child: Card(child: Padding(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, children: [const CircularProgressIndicator(), const SizedBox(height: 16), Text(_loadingMessage)]))))),
+      ]),
+      floatingActionButton: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+        FloatingActionButton.extended(heroTag: 'more', onPressed: _scanMorePages, icon: const Icon(Icons.add_a_photo), label: const Text('Quét thêm')),
+        const SizedBox(height: 12),
+        FloatingActionButton.extended(heroTag: 'pdf', onPressed: _isExporting ? null : _exportPdf, backgroundColor: Colors.teal, foregroundColor: Colors.white, icon: const Icon(Icons.picture_as_pdf), label: Text(_isExporting ? 'Đang tạo PDF...' : 'Xuất PDF')),
+      ]),
     );
   }
 }
