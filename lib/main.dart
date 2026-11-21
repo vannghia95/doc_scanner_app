@@ -415,34 +415,67 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     }
   }
 
+  Future<String> _ocrSinglePageWithAI(int idx, String apiKey) async {
+    final comp = await FlutterImageCompress.compressWithFile(
+      widget.doc.imagePaths[idx],
+      minWidth: 1100,
+      minHeight: 1100,
+      quality: 68,
+    );
+    final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
+    final res = await http.post(
+      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'contents': [{'parts': [
+          {'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh (giữ đúng dấu tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về văn bản.'},
+          {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
+        ]}],
+        'generationConfig': {
+          'temperature': 0.1,
+          'thinkingConfig': {'thinkingBudget': 0}
+        }
+      }),
+    );
+    if (res.statusCode == 200) {
+      return (jsonDecode(res.body)['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '').toString().trim();
+    } else {
+      throw Exception('Lỗi API (${res.statusCode}): ${res.body}');
+    }
+  }
+
   Future<void> _recognizeWithAI({int? pageIdx}) async {
     final apiKey = await StorageService.getApiKey();
     if (apiKey.isEmpty) { _showSnack('Chưa có API Key.'); return; }
-    setState(() { _isRecognizing = true; _loadingMessage = 'AI đang đọc chính xác từng dấu thanh...'; });
+    final indices = pageIdx != null ? [pageIdx] : List.generate(widget.doc.imagePaths.length, (i) => i);
+    setState(() {
+      _isRecognizing = true;
+      _loadingMessage = indices.length == 1
+          ? 'AI đang đọc siêu tốc trang ${indices.first + 1}...'
+          : 'AI đang đọc song song ${indices.length} trang...';
+    });
     try {
-      final indices = pageIdx != null ? [pageIdx] : List.generate(widget.doc.imagePaths.length, (i) => i);
-      final buf = StringBuffer();
-      for (final idx in indices) {
-        final comp = await FlutterImageCompress.compressWithFile(widget.doc.imagePaths[idx], minWidth: 1600, minHeight: 1600, quality: 85);
-        final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
-        final res = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'contents': [{'parts': [
-              {'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh tài liệu này (giữ đúng từng dấu thanh tiếng Việt, chữ Hán nếu có, và ngắt đoạn tự nhiên). Chỉ trả về nội dung văn bản, không giải thích gì thêm.'},
-              {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
-            ]}]
-          }),
-        );
-        if (res.statusCode == 200) {
-          final txt = jsonDecode(res.body)['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
-          if (indices.length > 1) buf.writeln('--- TRANG ${idx + 1} ---');
-          buf.writeln(txt.toString().trim());
-          buf.writeln();
-        } else {
-          throw Exception('Lỗi API (${res.statusCode}): ${res.body}');
+      final results = List<String>.filled(indices.length, '');
+      // Chạy song song từng nhóm 4 trang cùng lúc để tăng tốc tối đa
+      for (int start = 0; start < indices.length; start += 4) {
+        final end = (start + 4 < indices.length) ? start + 4 : indices.length;
+        final batch = <Future<void>>[];
+        for (int j = start; j < end; j++) {
+          final pageIndex = indices[j];
+          batch.add(() async {
+            results[j] = await _ocrSinglePageWithAI(pageIndex, apiKey);
+          }());
         }
+        await Future.wait(batch);
+        if (mounted && indices.length > 1) {
+          setState(() => _loadingMessage = 'Đã xong $end/${indices.length} trang...');
+        }
+      }
+      final buf = StringBuffer();
+      for (int j = 0; j < indices.length; j++) {
+        if (indices.length > 1) buf.writeln('--- TRANG ${indices[j] + 1} ---');
+        buf.writeln(results[j]);
+        buf.writeln();
       }
       if (!mounted) return;
       _showTextSheet(pageIdx != null ? 'AI OCR - Trang ${pageIdx + 1}' : 'AI OCR (${indices.length} trang)', buf.toString().trim());
