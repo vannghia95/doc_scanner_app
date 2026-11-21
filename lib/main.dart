@@ -418,25 +418,40 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   Future<String> _ocrSinglePageWithAI(int idx, String apiKey) async {
     final comp = await FlutterImageCompress.compressWithFile(
       widget.doc.imagePaths[idx],
-      minWidth: 1350,
-      minHeight: 1350,
-      quality: 75,
+      minWidth: 1200,
+      minHeight: 1200,
+      quality: 72,
     );
     final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
-    final res = await http.post(
-      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey'),
+
+    final payload = jsonEncode({
+      'contents': [{'parts': [
+        {'text': 'Chép lại chính xác toàn bộ chữ trong ảnh này (đúng dấu tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về văn bản.'},
+        {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
+      ]}],
+      'generationConfig': {
+        'temperature': 0.1,
+        'maxOutputTokens': 4096,
+        'thinkingConfig': {'thinkingBudget': 0}
+      }
+    });
+
+    // Dùng gemini-2.5-flash-lite siêu tốc (1-2s), có timeout 25s chống treo mạng
+    http.Response res = await http.post(
+      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$apiKey'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'contents': [{'parts': [
-          {'text': 'Hãy đọc và chép lại toàn bộ chữ có trong ảnh trang sách này (giữ chính xác từng dấu thanh tiếng Việt và chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ xuất nội dung văn bản.'},
-          {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
-        ]}],
-        'generationConfig': {
-          'temperature': 0.1,
-          'maxOutputTokens': 4096
-        }
-      }),
-    );
+      body: payload,
+    ).timeout(const Duration(seconds: 25));
+
+    // Nếu tài khoản không hỗ trợ flash-lite, tự động chuyển sang gemini-3.8-flash tắt suy luận
+    if (res.statusCode == 404) {
+      res = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: payload,
+      ).timeout(const Duration(seconds: 25));
+    }
+
     if (res.statusCode == 200) {
       final data = jsonDecode(res.body);
       final parts = data['candidates']?[0]?['content']?['parts'] as List? ?? [];
@@ -447,10 +462,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         }
       }
       final extracted = textBuf.toString().trim();
-      if (extracted.isEmpty) {
-        return 'Phản hồi thô từ AI (để kiểm tra): ${res.body}';
-      }
-      return extracted;
+      return extracted.isEmpty ? 'AI không trả về chữ (${res.body})' : extracted;
     } else {
       throw Exception('Lỗi API (${res.statusCode}): ${res.body}');
     }
