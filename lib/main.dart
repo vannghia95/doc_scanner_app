@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -427,7 +427,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
         final res = await http.post(
           Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey'),
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
           body: jsonEncode({
             'contents': [{'parts': [
               {'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh này (giữ đúng dấu tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về văn bản.'},
