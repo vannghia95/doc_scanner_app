@@ -582,6 +582,25 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
 
   void _showSnack(String m) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); }
 
+  Future<void> _openPageViewer(int initialIndex) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PageEditorScreen(
+          doc: widget.doc,
+          initialIndex: initialIndex,
+          onChanged: () {
+            if (mounted) setState(() {});
+            widget.onUpdate();
+          },
+          onRunAI: (idx) => _recognizeWithAI(pageIdx: idx),
+          onRunOffline: (idx) => _recognizeOffline(pageIdx: idx),
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -604,7 +623,10 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                 itemBuilder: (_, idx) => Card(
                   clipBehavior: Clip.antiAlias,
                   child: Stack(fit: StackFit.expand, children: [
-                    Image.file(File(widget.doc.imagePaths[idx]), fit: BoxFit.cover),
+                    GestureDetector(
+                      onTap: () => _openPageViewer(idx),
+                      child: Image.file(File(widget.doc.imagePaths[idx]), fit: BoxFit.cover),
+                    ),
                     Positioned(bottom: 8, left: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(12)), child: Text('Trang ${idx + 1}', style: const TextStyle(color: Colors.white, fontSize: 12)))),
                     Positioned(bottom: 4, right: 4, child: Row(mainAxisSize: MainAxisSize.min, children: [
                       CircleAvatar(radius: 17, backgroundColor: Colors.deepPurple, child: IconButton(padding: EdgeInsets.zero, icon: const Icon(Icons.auto_awesome, size: 16, color: Colors.white), onPressed: _isRecognizing ? null : () => _recognizeWithAI(pageIdx: idx))),
@@ -622,6 +644,228 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         const SizedBox(height: 12),
         FloatingActionButton.extended(heroTag: 'pdf', onPressed: _isExporting ? null : _exportPdf, backgroundColor: Colors.teal, foregroundColor: Colors.white, icon: const Icon(Icons.picture_as_pdf), label: Text(_isExporting ? 'Đang tạo PDF...' : 'Xuất PDF')),
       ]),
+    );
+  }
+}
+
+class PageEditorScreen extends StatefulWidget {
+  final ScannedDoc doc;
+  final int initialIndex;
+  final VoidCallback onChanged;
+  final Future<void> Function(int idx) onRunAI;
+  final Future<void> Function(int idx) onRunOffline;
+
+  const PageEditorScreen({
+    super.key,
+    required this.doc,
+    required this.initialIndex,
+    required this.onChanged,
+    required this.onRunAI,
+    required this.onRunOffline,
+  });
+
+  @override
+  State<PageEditorScreen> createState() => _PageEditorScreenState();
+}
+
+class _PageEditorScreenState extends State<PageEditorScreen> {
+  late PageController _pageController;
+  late int _currentIndex;
+  bool _isProcessing = false;
+  int _imageRevision = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: _currentIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _rotateCurrentPage(int angle) async {
+    if (_isProcessing || widget.doc.imagePaths.isEmpty) return;
+    setState(() => _isProcessing = true);
+    try {
+      final path = widget.doc.imagePaths[_currentIndex];
+      final bytes = await File(path).readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded != null) {
+        final rotated = img.copyRotate(decoded, angle: angle);
+        await File(path).writeAsBytes(img.encodeJpg(rotated, quality: 92));
+        FileImage(File(path)).evict();
+        setState(() => _imageRevision++);
+        widget.onChanged();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi xoay ảnh: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  Future<void> _retakeOrCropCurrentPage() async {
+    if (_isProcessing || widget.doc.imagePaths.isEmpty) return;
+    try {
+      final pics = await CunningDocumentScanner.getPictures(
+        noOfPages: 1,
+        isGalleryImportAllowed: true,
+      );
+      if (pics != null && pics.isNotEmpty) {
+        setState(() => _isProcessing = true);
+        final saved = await StorageService.persistImages([pics.first]);
+        if (saved.isNotEmpty) {
+          final oldFile = File(widget.doc.imagePaths[_currentIndex]);
+          if (await oldFile.exists()) await oldFile.delete();
+          setState(() {
+            widget.doc.imagePaths[_currentIndex] = saved.first;
+            _imageRevision++;
+          });
+          widget.onChanged();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Đã cập nhật trang mới!')),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi chỉnh sửa trang: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  Future<void> _deleteCurrentPage() async {
+    if (widget.doc.imagePaths.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Xóa trang này?'),
+        content: Text('Bạn có chắc muốn xóa Trang ${_currentIndex + 1} khỏi tài liệu?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Hủy')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Xóa'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final f = File(widget.doc.imagePaths[_currentIndex]);
+    if (await f.exists()) await f.delete();
+    widget.doc.imagePaths.removeAt(_currentIndex);
+    widget.onChanged();
+
+    if (widget.doc.imagePaths.isEmpty) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    setState(() {
+      if (_currentIndex >= widget.doc.imagePaths.length) {
+        _currentIndex = widget.doc.imagePaths.length - 1;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.doc.imagePaths.length;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black87,
+        foregroundColor: Colors.white,
+        title: Text('Trang ${_currentIndex + 1} / $total', style: const TextStyle(fontSize: 16)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.auto_awesome, color: Colors.amber),
+            tooltip: 'AI OCR trang này',
+            onPressed: () async {
+              Navigator.pop(context);
+              await widget.onRunAI(_currentIndex);
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.text_fields, color: Colors.tealAccent),
+            tooltip: 'OCR Offline trang này',
+            onPressed: () async {
+              Navigator.pop(context);
+              await widget.onRunOffline(_currentIndex);
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            tooltip: 'Xóa trang',
+            onPressed: _deleteCurrentPage,
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          PageView.builder(
+            controller: _pageController,
+            itemCount: total,
+            onPageChanged: (index) => setState(() => _currentIndex = index),
+            itemBuilder: (context, index) {
+              final path = widget.doc.imagePaths[index];
+              return InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 5.0,
+                child: Center(
+                  child: Image.file(
+                    File(path),
+                    key: ValueKey('${path}_$_imageRevision'),
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              );
+            },
+          ),
+          if (_isProcessing)
+            Container(
+              color: Colors.black54,
+              child: const Center(child: CircularProgressIndicator(color: Colors.tealAccent)),
+            ),
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          color: Colors.black87,
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              TextButton.icon(
+                onPressed: _isProcessing ? null : () => _rotateCurrentPage(-90),
+                icon: const Icon(Icons.rotate_left, color: Colors.white),
+                label: const Text('Xoay trái', style: TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+              TextButton.icon(
+                onPressed: _isProcessing ? null : () => _rotateCurrentPage(90),
+                icon: const Icon(Icons.rotate_right, color: Colors.white),
+                label: const Text('Xoay phải', style: TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+              TextButton.icon(
+                onPressed: _isProcessing ? null : _retakeOrCropCurrentPage,
+                icon: const Icon(Icons.crop_rotate, color: Colors.tealAccent),
+                label: const Text('Quét / Cắt lại', style: TextStyle(color: Colors.tealAccent, fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
