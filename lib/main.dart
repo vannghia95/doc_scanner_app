@@ -426,22 +426,30 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         final comp = await FlutterImageCompress.compressWithFile(widget.doc.imagePaths[idx], minWidth: 1600, minHeight: 1600, quality: 85);
         final b64 = base64Encode(comp ?? await File(widget.doc.imagePaths[idx]).readAsBytes());
         final res = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent'),
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/interactions'),
           headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
           body: jsonEncode({
-            'contents': [{'parts': [
-              {'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh này (giữ đúng dấu tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về văn bản.'},
-              {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}}
-            ]}]
+            'model': 'gemini-3.8-flash',
+            'input': [
+              {'type': 'text', 'text': 'Trích xuất chính xác toàn bộ văn bản trong ảnh này (giữ đúng từng dấu thanh tiếng Việt, chữ Hán nếu có, ngắt đoạn tự nhiên). Chỉ trả về nội dung văn bản, không giải thích gì thêm.'},
+              {'type': 'image', 'data': b64, 'mime_type': 'image/jpeg'}
+            ]
           }),
         );
         if (res.statusCode == 200) {
-          final txt = jsonDecode(res.body)['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
+          final data = jsonDecode(res.body);
+          String txt = '';
+          final outputs = data['outputs'] as List? ?? [];
+          for (final item in outputs) {
+            if (item['type'] == 'text' && item['text'] != null) {
+              txt += item['text'].toString();
+            }
+          }
           if (indices.length > 1) buf.writeln('--- TRANG ${idx + 1} ---');
-          buf.writeln(txt.toString().trim());
+          buf.writeln(txt.trim());
           buf.writeln();
         } else {
-          throw Exception('Lỗi API (${res.statusCode})');
+          throw Exception('Lỗi API (${res.statusCode}): ${res.body}');
         }
       }
       if (!mounted) return;
