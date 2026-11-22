@@ -408,23 +408,23 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
 
   Future<String> _runOfflineOcrOnPage(String imagePath) async {
     final cleanPath = await _preprocessForOcr(imagePath);
-    if (!_useChineseScript) {
-      try {
-        final tessText = await FlutterTesseractOcr.extractText(
-          cleanPath,
-          language: 'vie',
-          args: {
-            'psm': '6',
-            'preserve_interword_spaces': '1',
-          },
-        );
-        if (tessText.trim().isNotEmpty) {
-          return tessText.trim();
-        }
-      } catch (_) {}
-    }
-    // Dự phòng hoặc khi chọn chế độ chữ Hán -> dùng ML Kit
-    final rec = TextRecognizer(script: _useChineseScript ? TextRecognitionScript.chinese : TextRecognitionScript.latin);
+    try {
+      final lang = _useChineseScript ? 'chi_tra+chi_sim' : 'vie';
+      final tessText = await FlutterTesseractOcr.extractText(
+        cleanPath,
+        language: lang,
+        args: {
+          'psm': '6',
+          'preserve_interword_spaces': '1',
+        },
+      );
+      if (tessText.trim().isNotEmpty) {
+        return tessText.trim();
+      }
+    } catch (_) {}
+
+    // Chỉ dùng ML Kit Latin làm dự phòng (tuyệt đối không gọi ML Kit Chinese để tránh văng app)
+    final rec = TextRecognizer(script: TextRecognitionScript.latin);
     try {
       final res = await rec.processImage(InputImage.fromFilePath(cleanPath));
       return res.text.trim();

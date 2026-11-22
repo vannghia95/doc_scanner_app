@@ -44,7 +44,9 @@ jobs:
           cp ../lib/main.dart lib/main.dart
           mkdir -p assets/tessdata
           curl -L -o assets/tessdata/vie.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/vie.traineddata
-          echo '{"files":["vie.traineddata"]}' > assets/tessdata_config.json
+          curl -L -o assets/tessdata/chi_tra.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_tra.traineddata
+          curl -L -o assets/tessdata/chi_sim.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata
+          echo '{"files":["vie.traineddata","chi_tra.traineddata","chi_sim.traineddata"]}' > assets/tessdata_config.json
           python3 -c '
           with open("pubspec.yaml", "r") as f:
               y = f.read()
